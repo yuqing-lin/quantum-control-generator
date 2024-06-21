@@ -96,10 +96,10 @@ def generate_snap(chi, waveform, parameters, length, start, phase, chop=12, rise
         pi_amp = calibrate_rounded_square_pi_amp(half_length, rise_time)
 
     for idx, theta in enumerate(parameters):
+        detune = -chi * idx
+        theta_phase = np.pi - theta if theta <= np.pi else 3 * np.pi - theta
         if theta == 0:
             continue
-        detune = -chi * idx
-        theta_phase = np.pi - theta if theta > np.pi else theta
 
         if waveform == "square":
             I1, Q1 = square_pulse(detune, pi_amp, half_length, start, phase)
