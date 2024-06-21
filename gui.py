@@ -1,6 +1,12 @@
 import sys
-from PyQt5.QtWidgets import QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QLabel, QDialog, QFormLayout, QLineEdit, QDialogButtonBox, QApplication, QPushButton, QGraphicsView, QGraphicsScene, QGraphicsItem, QGraphicsPixmapItem, QMessageBox, QGraphicsEllipseItem, QGraphicsLineItem, QGraphicsTextItem
-from PyQt5.QtGui import QPainter, QPen, QColor, QBrush, QFont, QDrag, QPixmap
+from PyQt5.QtWidgets import (
+    QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QLabel, QDialog,
+    QFormLayout, QLineEdit, QDialogButtonBox, QApplication, QPushButton,
+    QGraphicsView, QGraphicsScene, QGraphicsItem, QGraphicsPixmapItem,
+    QMessageBox, QGraphicsEllipseItem, QGraphicsLineItem, QGraphicsTextItem,
+    QGraphicsDropShadowEffect, QAction
+)
+from PyQt5.QtGui import QPainter, QPen, QColor, QBrush, QFont, QDrag, QPixmap, QTransform
 from PyQt5.QtCore import Qt, QMimeData, QRect, QRectF, QPointF
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -262,11 +268,12 @@ class GateParameterDialog(QDialog):
 
     def validate_complex(self, value, name):
         try:
-            complex_val = complex(value.replace('i', 'j'))
+            value = value.replace("pi", str(np.pi))
+            complex_val = complex(eval(value.replace('i', 'j')))
             return complex_val
-        except ValueError:
-            self.showError(f"Invalid {name}. Please enter a valid complex number (e.g., 1+2i or 3-4j).")
-            raise ValueError(f"Invalid {name}. Please enter a valid complex number.")
+        except (ValueError, SyntaxError):
+            self.showError(f"Invalid {name}. Please enter a valid complex number (e.g., pi, 1+2i, or 3-4j).")
+            raise ValueError(f"Invalid {name}. Please enter a valid complex number (e.g., pi, 1+2i, or 3-4j).")
     
     def showError(self, message):
         msg = QMessageBox()
@@ -274,7 +281,7 @@ class GateParameterDialog(QDialog):
         msg.setText(message)
         msg.setWindowTitle("Error")
         msg.exec_()
-    
+
 class CircuitWire(QGraphicsItem):
     def __init__(self, wire_type, index, t1):
         super().__init__()
@@ -285,12 +292,14 @@ class CircuitWire(QGraphicsItem):
         self.initUI()
         self.setAcceptDrops(True)
         self.offset = 150  # Offset to align start of time and wires
+        self.setAcceptHoverEvents(True)
+        self.gate_positions = []
         
     def initUI(self):
-        self.gate_positions = []  # Store positions of gates
-
+        self.gate_positions = []
+        
     def boundingRect(self):
-        return QRectF(0, 0, int(self.t1 * 50) + self.offset, 50)
+        return QRectF(0, 0, int(self.t1 * 50) + self.offset, (Nc + 1) * 60)
 
     def paint(self, painter, option, widget):
         pen = QPen(QColor(42, 43, 42, int(255 * 0.95)), 2, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
@@ -309,7 +318,7 @@ class CircuitWire(QGraphicsItem):
         visualization_start_time = (position.x() - self.offset) / 50  # 50 pixels is one microsecond
         start_time = 0.0 if visualization_start_time < 0.0 else position.x() / 50
         
-        parent_widget = self.scene().views()[0]  # Get the main window as the parent
+        parent_widget = self.scene().views()[0]
         main_window = self.get_main_window()
         dialog = GateParameterDialog(gate, start_time, main_window.chi, main_window.t1, parent_widget)
         if dialog.exec_() == QDialog.Accepted:
@@ -332,7 +341,7 @@ class CircuitWire(QGraphicsItem):
             # Check for overlaps with existing gates on all wires
             for item in self.scene().items():
                 if isinstance(item, CircuitWire):
-                    for existing_gate, existing_params, existing_position in item.gates:
+                    for existing_gate, existing_params, _, _, _, _ in item.gates:
                         existing_start_time = existing_params['t_i']
                         existing_duration = existing_params['delta_t']
                         existing_end_time = existing_start_time + existing_duration
@@ -349,18 +358,21 @@ class CircuitWire(QGraphicsItem):
 
             gate_width = max(int(duration * 50), 30)  # Visualization - 50 pixels per microsecond, minimum 30 pixels
 
+            additional_graphics = []
             if gate == 'SNAP':
                 gate_item = QGraphicsPixmapItem(draw_gate('SNAP', gate_width, 500, 'S', 20))
                 # Draw wire to the selected cavities
                 cavity_indices = parameters["cavity_indices"]
                 max_cavity_index = max(cavity_indices)
                 pen = QPen(QColor(48, 54, 51, int(255 * 0.95)), 2, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
-                self.scene().addLine(visualization_position + gate_width // 2, 25, visualization_position + gate_width // 2, max_cavity_index * 60 + 25, pen)
+                line = self.scene().addLine(visualization_position + gate_width // 2, 50, visualization_position + gate_width // 2, max_cavity_index * 60 + 25, pen)
+                additional_graphics.append(line)
                 for cavity_index in cavity_indices:
                     dot = QGraphicsEllipseItem(visualization_position + gate_width // 2 - 3, cavity_index * 60 + 22, 6, 6)
                     dot.setBrush(QBrush(QColor(48, 54, 51, int(255 * 0.95))))
                     dot.setPen(QPen(Qt.NoPen))
                     self.scene().addItem(dot)
+                    additional_graphics.append(dot)
             elif gate == 'Displacement':
                 cavity_index = parameters["cavity_index"]
                 gate_item = QGraphicsPixmapItem(draw_gate('Displacement', gate_width, 500, 'D', 20, cavity_index=cavity_index))
@@ -371,29 +383,22 @@ class CircuitWire(QGraphicsItem):
                 gate_item.setPos(visualization_position, cavity_index * 60 - 10)
                 # Draw the vertical wire from the transmon wire to the top of the ECD block
                 pen = QPen(QColor(48, 54, 51, int(255 * 0.95)), 2, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
-                self.scene().addLine(visualization_position + gate_width // 2, 25, visualization_position + gate_width // 2, cavity_index * 60, pen)
+                line = self.scene().addLine(visualization_position + gate_width // 2, 25, visualization_position + gate_width // 2, cavity_index * 60, pen)
+                additional_graphics.append(line)
                 dot = QGraphicsEllipseItem(visualization_position + gate_width // 2 - 3, 25 - 3, 6, 6)
                 dot.setBrush(QBrush(QColor(48, 54, 51, int(255 * 0.95))))
                 dot.setPen(QPen(Qt.NoPen))
                 self.scene().addItem(dot)
+                additional_graphics.append(dot)
 
-            # gate_item.setPos(position.x(), -10)
             gate_item.setPos(visualization_position, -10)
             self.scene().addItem(gate_item)
-            self.gates.append((gate, parameters, position))
+            gate_scene_pos = gate_item.mapToScene(gate_item.boundingRect().topLeft())
+            self.gates.append((gate, parameters, position, additional_graphics, gate_item, gate_scene_pos))
             self.gate_positions.append(gate_item)
-            self.update()  # Trigger a repaint
-
-            # Generate signal after adding a new gate
+            self.get_main_window().undo_stack.append(("add", (gate, parameters, position, additional_graphics, gate_item, gate_scene_pos)))
+            self.update()
             self.get_main_window().generate_signal()
-
-    def mouseReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            gate_type = event.mimeData().text()
-            position = event.pos()
-
-            column_x = round(position.x() / 10) * 10
-            self.addGate(gate_type, QPointF(column_x, self.pos().y()))
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasText():
@@ -410,9 +415,79 @@ class CircuitWire(QGraphicsItem):
             position = event.pos()
             column_x = round(position.x() / 50) * 50  # Align the block's position horizontally
             nearest_wire_index = self.find_nearest_wire(position.y())  # Find the nearest wire's index
-            self.addGate(gate_type, QPointF(column_x, nearest_wire_index * 60))
+            self.addGate(gate_type, QPointF(column_x, nearest_wire_index * 200))
             event.setDropAction(Qt.MoveAction)
             event.accept()
+
+    def hoverEnterEvent(self, event):
+        hovered_item = self.scene().itemAt(event.scenePos(), QTransform())
+        # print("Hover enter event position:", event.scenePos())
+        for gate, _, _, _, gate_item, gate_scene_pos in self.gates:
+            gate_scene_rect = QRectF(gate_scene_pos, gate_item.boundingRect().size())
+            if gate_scene_rect.contains(event.scenePos()):
+                gate_item.setOpacity(0.9)
+                event.accept()
+                return
+
+    def hoverLeaveEvent(self, event):
+        for _, _, _, _, gate_item, _ in self.gates:
+            if gate_item != self.get_main_window().selected_gate:
+                gate_item.setOpacity(1)
+        event.accept()
+
+    def mousePressEvent(self, event):
+        clicked_item = self.scene().itemAt(event.scenePos(), QTransform())
+        for gate, _, _, _, gate_item, gate_scene_pos in self.gates:
+            gate_scene_rect = QRectF(gate_scene_pos, gate_item.boundingRect().size())
+            if gate_scene_rect.contains(event.scenePos()):
+                main_window = self.get_main_window()
+                if main_window.selected_gate and main_window.selected_gate != gate_item:
+                    main_window.selected_gate.setGraphicsEffect(None)
+                    main_window.selected_gate.setOpacity(1)
+                main_window.selected_gate = gate_item
+                effect = QGraphicsDropShadowEffect()
+                effect.setColor(QColor('#959793'))
+                effect.setBlurRadius(2)
+                effect.setOffset(2, 2)
+                gate_item.setGraphicsEffect(effect)
+                gate_item.setOpacity(0.9)
+                event.accept()
+                return
+        # Clicking outside any gates
+        main_window = self.get_main_window()
+        if main_window.selected_gate:
+            main_window.selected_gate.setGraphicsEffect(None)
+            main_window.selected_gate.setOpacity(1)
+            main_window.selected_gate = None
+        super().mousePressEvent(event)
+
+    def restoreGate(self, gate_tuple):
+        gate, parameters, position, additional_graphics, gate_item, gate_scene_pos = gate_tuple
+        self.gates.append(gate_tuple)
+        self.gate_positions.append(gate_item)
+        self.scene().addItem(gate_item)
+        for graphic in additional_graphics:
+            self.scene().addItem(graphic)
+        self.update()
+
+    def deleteGate(self, gate_item):
+        for gate_tuple in self.gates:
+            if gate_tuple[4] == gate_item:
+                self.scene().removeItem(gate_item)
+                for graphic in gate_tuple[3]:
+                    self.scene().removeItem(graphic)
+                self.gates.remove(gate_tuple)
+                self.update()
+                return gate_tuple
+        return None
+    
+    def clear_all_gates(self):
+        for gate, parameters, position, additional_graphics, gate_item, gate_scene_pos in self.gates:
+            self.scene().removeItem(gate_item)
+            for graphic in additional_graphics:
+                self.scene().removeItem(graphic)
+        self.gates.clear()
+        self.update()
 
     def find_nearest_wire(self, y_position):
         wire_positions = [wire.pos().y() for wire in self.scene().items() if isinstance(wire, CircuitWire)]
@@ -487,6 +562,9 @@ class SignalPlotCanvas(FigureCanvas):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.selected_gate = None
+        self.undo_stack = []
+        self.redo_stack = []
         self.initUI()
 
     def initUI(self):
@@ -535,7 +613,7 @@ class MainWindow(QMainWindow):
 
         vertical_layout = QVBoxLayout()
         vertical_layout.addLayout(gate_layout_with_labels)
-        vertical_layout.addWidget(self.parameter_widget)  # Add parameter widget under gate icons
+        vertical_layout.addWidget(self.parameter_widget)
 
         self.gate_widget = QWidget()
         self.gate_widget.setLayout(vertical_layout)
@@ -553,6 +631,24 @@ class MainWindow(QMainWindow):
             font-size: 20px;
         """)
         self.save_button.clicked.connect(self.save_signal)
+
+        self.toolbar = self.addToolBar('Tools')
+        
+        undo_action = QAction('Undo', self)
+        undo_action.triggered.connect(self.undo)
+        self.toolbar.addAction(undo_action)
+
+        redo_action = QAction('Redo', self)
+        redo_action.triggered.connect(self.redo)
+        self.toolbar.addAction(redo_action)
+
+        delete_action = QAction('Delete Selected Gate', self)
+        delete_action.triggered.connect(self.delete_selected_gate)
+        self.toolbar.addAction(delete_action)
+
+        clear_all_action = QAction('Clear All', self)
+        clear_all_action.triggered.connect(self.clear_all)
+        self.toolbar.addAction(clear_all_action)
 
         self.circuit_area = QGraphicsView()
         self.scene = QGraphicsScene()
@@ -648,10 +744,10 @@ class MainWindow(QMainWindow):
 
         for i in range(Nc):
             cavity_wire = CircuitWire(f"Cavity {i + 1}", i + 1, self.t1)
-            cavity_wire.setPos(100, (i + 1) * 60)  # Vertical spacing between wires
+            cavity_wire.setPos(100, (i + 1) * 60)
             self.scene.addItem(cavity_wire)
 
-        self.draw_time_axis()  # Draw the time axis after all wires are set up
+        self.draw_time_axis()
 
     def draw_time_axis(self):
         offset = 100
@@ -666,7 +762,7 @@ class MainWindow(QMainWindow):
             self.scene.addItem(tick)
             time_value = (x - 50 - offset) / 50
             label = QGraphicsTextItem(f"{time_value:.1f}")
-            label.setPos(x - 15, (Nc + 1) * 60 + 30)  # Label position
+            label.setPos(x - 15, (Nc + 1) * 60 + 30)
             self.scene.addItem(label)
 
     def save_signal(self):
@@ -674,7 +770,7 @@ class MainWindow(QMainWindow):
 
         for wire in self.scene.items():
             if isinstance(wire, CircuitWire):
-                for gate, params, _ in wire.gates:
+                for gate, params, _, _, _, _ in wire.gates:
                     if gate == 'SNAP':
                         pulse_params.append({
                             "type": "snap",
@@ -743,7 +839,7 @@ class MainWindow(QMainWindow):
 
         for wire in self.scene.items():
             if isinstance(wire, CircuitWire):
-                for gate, params, _ in wire.gates:
+                for gate, params, _, _, _, _ in wire.gates:
                     if gate == 'SNAP':
                         pulse_params.append({
                             "type": "snap",
@@ -781,26 +877,74 @@ class MainWindow(QMainWindow):
                             "cavity_index": params["cavity_index"]
                         })
 
-        if not pulse_params:
-            print("No valid pulse parameters found.")
-            return
+        if pulse_params:
+            control_signals = build_circuit_and_generate_signal(Nc, self.chi, pulse_params, plot_signals=False)
+            
+            end_time = max([pulse_param["t_f"] for pulse_param in pulse_params])
+            tlist = np.linspace(0, end_time + 0.5, 100000)  # Pad with zero at the end for 0.5 microseconds; resolution: 1 nanosecond
 
-        control_signals = build_circuit_and_generate_signal(Nc, self.chi, pulse_params, plot_signals=False)
-        
-        end_time = max([pulse_param["t_f"] for pulse_param in pulse_params])
-        tlist = np.linspace(0, end_time + 0.5, 100000)  # Pad with zero at the end for 0.5 microseconds; resolution: 1 nanosecond
+            transmon_I = [control_signals['transmon_I'](t) for t in tlist]
+            transmon_Q = [control_signals['transmon_Q'](t) for t in tlist]
 
-        transmon_I = [control_signals['transmon_I'](t) for t in tlist]
-        transmon_Q = [control_signals['transmon_Q'](t) for t in tlist]
+            cavity_signals = []
+            for i in range(Nc):
+                cavity_I = [control_signals[f'cavity_{i+1}_I'](t) for t in tlist]
+                cavity_Q = [control_signals[f'cavity_{i+1}_Q'](t) for t in tlist]
+                cavity_signals.append((cavity_I, cavity_Q))
 
-        cavity_signals = []
-        for i in range(Nc):
-            cavity_I = [control_signals[f'cavity_{i+1}_I'](t) for t in tlist]
-            cavity_Q = [control_signals[f'cavity_{i+1}_Q'](t) for t in tlist]
-            cavity_signals.append((cavity_I, cavity_Q))
+            self.signal_visualization.update_plot(tlist, transmon_I, transmon_Q, cavity_signals)
+        else:
+            self.signal_visualization.draw_empty_plot()  # No gates, clear the plot
+    
+    def undo(self):
+        if self.undo_stack:
+            last_action = self.undo_stack.pop()
+            action_type, gate_tuple = last_action
+            gate, parameters, position, additional_graphics, gate_item, gate_scene_pos = gate_tuple
+            if action_type == "add":
+                for wire in self.scene.items():
+                    if isinstance(wire, CircuitWire):
+                        wire.deleteGate(gate_item)
+            elif action_type == "delete":
+                for wire in self.scene.items():
+                    if isinstance(wire, CircuitWire) and wire.index == (parameters.get('cavity_index') or parameters.get('cavity_indices', [None])[0]):
+                        wire.restoreGate(gate_tuple)
+            self.redo_stack.append(last_action)
+            self.generate_signal()
 
-        # Update the signal plot with the new data
-        self.signal_visualization.update_plot(tlist, transmon_I, transmon_Q, cavity_signals)
+    def redo(self):
+        if self.redo_stack:
+            last_action = self.redo_stack.pop()
+            action_type, gate_tuple = last_action
+            gate, parameters, position, additional_graphics, gate_item, gate_scene_pos = gate_tuple
+            if action_type == "add":
+                for wire in self.scene.items():
+                    if isinstance(wire, CircuitWire) and wire.index == (parameters.get('cavity_index') or parameters.get('cavity_indices', [None])[0]):
+                        wire.restoreGate(gate_tuple)
+            elif action_type == "delete":
+                for wire in self.scene.items():
+                    if isinstance(wire, CircuitWire):
+                        wire.deleteGate(gate_item)
+            self.undo_stack.append(last_action)
+            self.generate_signal()
+
+    def delete_selected_gate(self):
+        if self.selected_gate:
+            for wire in self.scene.items():
+                if isinstance(wire, CircuitWire):
+                    gate_tuple = wire.deleteGate(self.selected_gate)
+                    if gate_tuple:
+                        self.undo_stack.append(("delete", gate_tuple))
+            self.selected_gate = None
+            self.generate_signal()
+
+    def clear_all(self):
+        self.undo_stack.append(("clear", [wire.gates.copy() for wire in self.scene.items() if isinstance(wire, CircuitWire)]))
+        self.redo_stack.clear()
+        for wire in self.scene.items():
+            if isinstance(wire, CircuitWire):
+                wire.clear_all_gates()
+        self.generate_signal()
 
 def export_signal_to_csv(filename, tlist, transmon_I, transmon_Q, cavity_signals):
     with open(filename, mode='w', newline='') as file:
@@ -810,7 +954,6 @@ def export_signal_to_csv(filename, tlist, transmon_I, transmon_Q, cavity_signals
             writer.writerow([t, ti, tq] + list(cavities))
 
 if __name__ == '__main__':
-    # print("Loading application, please wait...")
     app = QApplication(sys.argv)
     mainWin = MainWindow()
     mainWin.show()

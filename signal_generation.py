@@ -19,12 +19,12 @@ def square_pulse(detune, amp, length, start, phase):
         lambda t: amp / 2 * unitstep_t(start, length, t) * np.sin(-detune * t + phase)
     )
 
-def gaussian_pulse(detune, amp, length, start, chop, phase):
+def gaussian_pulse(detune, amp, length, start, chop, phase, subtract_offset=False):
     sigma = length / chop
     mid = start + length * 0.5
     ts = np.linspace(start, start + length, 100000)
     waveform = gaussian_waveform(sigma, mid, ts)
-    offset = waveform[0]
+    offset = waveform[0] if subtract_offset else 0
     return (
         lambda t: amp / 2 * unitstep_t(start, length, t) * (gaussian_waveform(sigma, mid, t) - offset) / (1 - offset) * np.cos(-detune * t + phase),
         lambda t: amp / 2 * unitstep_t(start, length, t) * (gaussian_waveform(sigma, mid, t) - offset) / (1 - offset) * np.sin(-detune * t + phase)
