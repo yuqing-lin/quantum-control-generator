@@ -219,11 +219,11 @@ def build_circuit_and_generate_signal(Nc, chi, pulse_params, plot_signals=False)
         phase = gate.get("phase", 0)
 
         if gate["type"] == "snap":
-            I, Q = generate_snap(chi, gate["waveform"], gate["parameters"], length, t_i, gate.get("chop", 6), gate.get("rise_time", 1), phase)
+            I, Q = generate_snap(chi, gate["waveform"], gate["parameters"], length, t_i, phase, gate.get("chop", 6), gate.get("rise_time", 1))
             transmon_I = lambda t, transmon_I=transmon_I, I=I: transmon_I(t) + I(t)
             transmon_Q = lambda t, transmon_Q=transmon_Q, Q=Q: transmon_Q(t) + Q(t)
         elif gate["type"] == "displacement":
-            I, Q = generate_displacement(gate["waveform"], gate["parameter"], length, t_i, gate.get("chop", 6), gate.get("rise_time", 1), phase)
+            I, Q = generate_displacement(gate["waveform"], gate["parameter"], length, t_i, phase, gate.get("chop", 6), gate.get("rise_time", 1))
             cavity_index = int(gate["cavity_index"]) - 1  # Adjust for 1-based indexing
             cavity_I_list[cavity_index] = lambda t, cavity_I=cavity_I_list[cavity_index], I=I: cavity_I(t) + I(t)
             cavity_Q_list[cavity_index] = lambda t, cavity_Q=cavity_Q_list[cavity_index], Q=Q: cavity_Q(t) + Q(t)
