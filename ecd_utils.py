@@ -174,7 +174,7 @@ def conditional_displacement(
     qubit,
     buffer_time=4,
     curvature_correction=True,
-    pad=True,
+    pad=False,
     finite_difference=True,
     qubit_pulse_detuning=0,
     system=None

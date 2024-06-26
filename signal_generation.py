@@ -116,13 +116,14 @@ def generate_snap(chi, waveform, parameters, length, start, phase, chop=12, rise
 
     return snap_I, snap_Q
 
-def generate_ecd(beta, chi, length, start, phase, unit_amp, alpha_CD=30, buffer_time=1, curvature_correction=False, finite_difference=True):
+def generate_ecd(beta, chi, length, start, phase, unit_amp, alpha_CD=30, buffer_time=0.01, curvature_correction=False, finite_difference=True):
     # chi_prime_Hz = 1.0
     # Ks_Hz = 2.0  # The Kerr effect strength
     # epsilon_m_MHz = 400.0  # The maximum drive amplitude
     # sigma = 15
     # chop = 4
     # max_dac = 0.6  # The maximum DAC amplitude
+    buffer_time_ns = int(buffer_time * 1e3)
     storage = FakeStorage(chi_kHz=chi, unit_amp=unit_amp)
     qubit = FakeQubit()
 
@@ -131,15 +132,14 @@ def generate_ecd(beta, chi, length, start, phase, unit_amp, alpha_CD=30, buffer_
         alpha=alpha_CD,
         storage=storage,
         qubit=qubit,
-        buffer_time=buffer_time,
+        buffer_time=buffer_time_ns,
         curvature_correction=curvature_correction,
         finite_difference=finite_difference,
         system=None
     )
 
-    # Determine the original time range
+    # Normalize the time
     original_t_max = max(I_cavity_func.x[-1], Q_cavity_func.x[-1], I_qubit_func.x[-1], Q_qubit_func.x[-1])
-    # Normalize the time to fit within the desired length
     scale_factor = length / original_t_max
     def normalize_time(func):
         return lambda t: func(t / scale_factor)
@@ -150,10 +150,13 @@ def generate_ecd(beta, chi, length, start, phase, unit_amp, alpha_CD=30, buffer_
     Q_qubit_norm = normalize_time(Q_qubit_func)
 
     phase_factor = np.exp(1j * phase)
-    I_transmon = lambda t: np.real(phase_factor * I_qubit_norm(t - start)) if start <= t < start + length else 0
-    Q_transmon = lambda t: np.imag(phase_factor * Q_qubit_norm(t - start)) if start <= t < start + length else 0
-    I_cavity = lambda t: np.real(phase_factor * I_cavity_norm(t - start)) if start <= t < start + length else 0
-    Q_cavity = lambda t: np.imag(phase_factor * Q_cavity_norm(t - start)) if start <= t < start + length else 0
+    transmon_signal = lambda t: phase_factor * (I_qubit_norm(t - start) + 1j * Q_qubit_norm(t - start)) if start <= t < start + length else 0
+    cavity_signal = lambda t: phase_factor * (I_cavity_norm(t - start) + 1j * Q_cavity_norm(t - start)) if start <= t < start + length else 0
+    
+    I_transmon = lambda t: np.real(transmon_signal(t))
+    Q_transmon = lambda t: np.imag(transmon_signal(t))
+    I_cavity = lambda t: np.real(cavity_signal(t))
+    Q_cavity = lambda t: np.imag(cavity_signal(t))
 
     return I_transmon, Q_transmon, I_cavity, Q_cavity
 
