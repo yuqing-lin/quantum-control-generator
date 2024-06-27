@@ -4,7 +4,7 @@ from PyQt5.QtWidgets import (
     QFormLayout, QLineEdit, QDialogButtonBox, QApplication, QPushButton,
     QGraphicsView, QGraphicsScene, QGraphicsItem, QGraphicsPixmapItem,
     QMessageBox, QGraphicsEllipseItem, QGraphicsLineItem, QGraphicsTextItem,
-    QGraphicsDropShadowEffect, QAction, QFileDialog
+    QGraphicsDropShadowEffect, QAction, QFileDialog, QToolButton, QWhatsThis
 )
 from PyQt5.QtGui import QPainter, QPen, QColor, QBrush, QFont, QDrag, QPixmap, QTransform
 from PyQt5.QtCore import Qt, QMimeData, QRect, QRectF, QPointF
@@ -16,8 +16,7 @@ from signal_generation import build_circuit_and_generate_signal
 from qutip import *
 import csv
 
-Nt = 1  # Number of transmons
-Nc = 1  # Number of cavities
+Nt = 1  # Number of transmons: only 1 is allowed currently
 
 def draw_gate(gate_type, width, height, label_text, label_font_size, cavity_index=0, initial=False):
     buffer = 10  # Buffer to ensure the full image is displayed
@@ -90,18 +89,31 @@ class SystemParameterDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Enter Parameters")
-        self.resize(450, 150)
+        self.resize(450, 180)
         
         self.layout = QFormLayout(self)
-        
+
         self.chi_input = QLineEdit("2*pi")
-        self.chi_input.setPlaceholderText("Enter \chi value (e.g., 2*pi)")
+        self.chi_input.setPlaceholderText("Enter χ value (e.g., 2*pi)")
+        self.chi_input.setWhatsThis("""
+            <p><b>χ:</b> The dispersive shift of the system.</p>
+        """)
         self.layout.addRow("χ", self.chi_input)
-        
+
         self.t1_input = QLineEdit("100")
         self.t1_input.setPlaceholderText("Enter T1 value")
+        self.t1_input.setWhatsThis("""
+            <p><b>T1:</b> The relaxation time of the transmon in microseconds (µs).</p>
+        """)
         self.layout.addRow("T1", self.t1_input)
         
+        self.nc_input = QLineEdit("1")
+        self.nc_input.setPlaceholderText("Enter number of cavities (Nc)")
+        self.nc_input.setWhatsThis("""
+            <p><b>Nc:</b> The number of cavities in the system.</p>
+        """)
+        self.layout.addRow("Nc", self.nc_input)
+
         self.buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
@@ -109,10 +121,10 @@ class SystemParameterDialog(QDialog):
 
     def get_parameters(self):
         chi_value = self.chi_input.text().replace("pi", str(np.pi))
-        return float(eval(chi_value)), float(self.t1_input.text())
+        return float(eval(chi_value)), float(self.t1_input.text()), int(self.nc_input.text())
 
 class GateParameterDialog(QDialog):
-    def __init__(self, gate_type, start_time, chi, t1=None, parent=None, edit_mode=False):
+    def __init__(self, gate_type, start_time, chi, t1, Nc, parent=None, edit_mode=False):
         super().__init__(parent)
         self.setWindowTitle(f"{gate_type} Parameters")
         self.resize(760, 380)
@@ -154,13 +166,16 @@ class GateParameterDialog(QDialog):
 
         self.start_time_input = QLineEdit(self)
         self.start_time_input.setText(str(start_time))
+        self.start_time_input.setWhatsThis("""
+            <p><b>Start Time:</b> The time at which the pulse should begin.</p>
+        """)
         if self.edit_mode:
             self.start_time_input.setDisabled(True)
         self.layout.addRow("Start Time", self.start_time_input)
 
         self.button_container = QWidget()
         self.button_layout = QHBoxLayout(self.button_container)
-        self.button_layout.setContentsMargins(140, 0, 0, 0)
+        self.button_layout.setContentsMargins(550, 0, 0, 0)
         self.append_button = QPushButton("Append to End")
         self.append_button.clicked.connect(self.append_to_end)
         self.button_layout.addWidget(self.append_button)
@@ -169,37 +184,68 @@ class GateParameterDialog(QDialog):
         if gate_type == 'SNAP':
             self.thetas_input = QLineEdit(self)
             self.thetas_input.setPlaceholderText("Enter theta values separated by commas (e.g., 0, pi/2, 2*pi)")
+            self.thetas_input.setWhatsThis("""
+                <p><b>Thetas:</b> The SNAP gate is defined as</p>
+                <p>S(θ) = Σ(exp(i θ<sub>n</sub>) |n&gt;&lt;n|)</p>
+                <p>where θ<sub>n</sub> are the phase shifts applied to each Fock state |n&gt;.</p>
+            """)
             self.layout.addRow("Thetas", self.thetas_input)
             self.length_factor_input = QLineEdit("10")
             self.length_factor_input.setPlaceholderText("Enter SNAP pulse length factor")
+            self.length_factor_input.setWhatsThis("""
+                <p><b>Length Factor:</b> Determines the duration of the pulse.</p>
+                <p>Pulse length = (2π / χ) · length factor.</p>
+            """)            
             if self.Nc > 1:
                 self.cavity_indices_input = QLineEdit(self)
                 self.cavity_indices_input.setPlaceholderText(f"Enter cavity indices separated by commas")
+                self.cavity_indices_input.setWhatsThis("""
+                    <p><b>Cavity Indices:</b> Specifies which cavity or cavities the operation should target.</p>
+                """)
                 self.layout.addRow("Cavity Indices", self.cavity_indices_input)
-                if self.edit_mode:
-                    self.cavity_indices_input.setDisabled(True)
+                # if self.edit_mode:
+                #     self.cavity_indices_input.setDisabled(True)
         
         if gate_type == 'Displacement' or gate_type == 'ECD':
             if gate_type == 'Displacement':
                 self.alpha_input = QLineEdit(self)
+                self.alpha_input.setWhatsThis("""
+                    <p><b>Alpha:</b> The Displacements operator is defined as</p>
+                    <p>D(α) = exp(α a<sup>†</sup> - α<sup>*</sup> a)</p>
+                    <p>where α is the displacement amplitude.</p>
+                """)
                 self.layout.addRow("Alpha", self.alpha_input)
             if gate_type == 'ECD':
                 self.beta_input = QLineEdit(self)
+                self.beta_input.setWhatsThis("""
+                    <p><b>Beta:</b> The ECD gate is defined as</p>
+                    <p>ECD(β) = D(β / 2) |e&gt;&lt;g| + D(-β / 2) |g&gt;&lt;e|</p>
+                    <p>where β is the displacement amplitude.</p>
+                """)
                 self.layout.addRow("Beta", self.beta_input)
                 self.unit_amp_input = QLineEdit("0.05")
                 self.unit_amp_input.setPlaceholderText("Enter unit amplitude")
+                self.unit_amp_input.setWhatsThis("""
+                    <p><b>Unit Amplitude:</b> The unit amplitude scaling of the ECD pulse.</p>
+                """)
                 self.layout.addRow("Unit Amplitude", self.unit_amp_input)
             self.length_factor_input = QLineEdit("0.01" if gate_type == 'Displacement' else "0.1")
             self.length_factor_input.setPlaceholderText(f"Enter {gate_type} pulse length factor")
+            self.length_factor_input.setWhatsThis("""
+                <p><b>Length Factor:</b> Determines the duration of the pulse.</p>
+                <p>Pulse length = (2π / χ) · length factor.</p>
+            """)  
             if self.Nc > 1:
                 self.cavity_index_input = QLineEdit(self)
                 self.cavity_index_input.setPlaceholderText("Enter cavity index")
+                self.cavity_index_input.setWhatsThis("""
+                    <p><b>Cavity Index:</b> Specifies which cavity the operation should target.</p>
+                """)
                 self.layout.addRow("Cavity Index", self.cavity_index_input)
-                if self.edit_mode:
-                    self.cavity_index_input.setDisabled(True)
+                # if self.edit_mode:
+                #     self.cavity_index_input.setDisabled(True)
 
         self.layout.addRow("Length Factor", self.length_factor_input)
-        # self.layout.addRow("Start Time", self.start_time_input)
 
         # self.amplitude_input = QLineEdit("pi")
         # self.amplitude_input.setPlaceholderText("Enter amplitude")
@@ -207,6 +253,9 @@ class GateParameterDialog(QDialog):
 
         self.phase_input = QLineEdit("0")
         self.phase_input.setPlaceholderText("Enter phase value (e.g., 0, pi/2, 2*pi)")
+        self.phase_input.setWhatsThis("""
+            <p><b>Phase:</b> The additional phase to apply to the pulse.</p>
+        """)
         self.layout.addRow("Phase", self.phase_input)
 
         self.buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
@@ -233,8 +282,8 @@ class GateParameterDialog(QDialog):
                     raise ValueError(f"Invalid cavity indices. Please enter integers between 1 and {self.Nc}.")
                 parameters["cavity_indices"] = list(set(cavity_indices))  # Remove duplicates
             length_factor = self.validate_float(self.length_factor_input.text(), "length factor")
-            parameters["delta_t"] = (two_pi / self.chi) * length_factor  # Duration
-        
+            parameters["delta_t"] = (two_pi / self.chi) * length_factor
+            
         elif self.gate_type == 'Displacement' or self.gate_type == 'ECD':
             if self.gate_type == 'Displacement':
                 alpha = self.alpha_input.text().split(',')
@@ -297,6 +346,9 @@ class GateParameterDialog(QDialog):
             raise ValueError(f"Invalid {name}. Please enter a valid integer.")
     
     def validate_float_list(self, value, name):
+        if not value.strip():
+            self.showError(f"Invalid {name}. Please enter a list of valid numbers separated by commas.")
+            raise ValueError(f"Invalid {name}. Please enter a list of valid numbers separated by commas.")
         try:
             return [float(eval(item.replace("pi", str(np.pi)))) for item in value.split(",")]
         except ValueError:
@@ -304,6 +356,9 @@ class GateParameterDialog(QDialog):
             raise ValueError(f"Invalid {name}. Please enter a list of valid numbers separated by commas.")
     
     def validate_int_list(self, value, name):
+        if not value.strip():
+            self.showError(f"Invalid {name}. Please enter a list of valid integers separated by commas.")
+            raise ValueError(f"Invalid {name}. Please enter a list of valid integers separated by commas.")
         try:
             return [int(item) for item in value.split(",")]
         except ValueError:
@@ -327,11 +382,12 @@ class GateParameterDialog(QDialog):
         msg.exec_()
 
 class CircuitWire(QGraphicsItem):
-    def __init__(self, wire_type, index, t1):
+    def __init__(self, wire_type, index, t1, Nc):
         super().__init__()
         self.wire_type = wire_type
         self.index = index
         self.t1 = t1
+        self.Nc = Nc
         self.gates = []
         self.initUI()
         self.setAcceptDrops(True)
@@ -343,7 +399,7 @@ class CircuitWire(QGraphicsItem):
         self.gate_positions = []
         
     def boundingRect(self):
-        return QRectF(0, 0, int(self.t1 * 50) + self.offset, (Nc + 1) * 60)
+        return QRectF(0, 0, int(self.t1 * 50) + self.offset, (self.Nc + 1) * 60)
 
     def paint(self, painter, option, widget):
         pen = QPen(QColor(42, 43, 42, int(255 * 0.95)), 2, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
@@ -364,7 +420,7 @@ class CircuitWire(QGraphicsItem):
         
         parent_widget = self.scene().views()[0]
         main_window = self.get_main_window()
-        dialog = GateParameterDialog(gate, start_time, main_window.chi, main_window.t1, parent_widget)
+        dialog = GateParameterDialog(gate, start_time, main_window.chi, main_window.t1, main_window.Nc, parent_widget)
         if dialog.exec_() == QDialog.Accepted:
             try:
                 parameters = dialog.get_parameters()
@@ -395,7 +451,6 @@ class CircuitWire(QGraphicsItem):
                             self.showError("Gate overlap detected. Choose a different time.")
                             return
 
-            # Ensure the total duration does not exceed T1
             if end_time > self.t1:
                 self.showError(f"Total gate sequence duration exceeds T1 ({self.t1} µs). Choose a different time.")
                 return
@@ -458,14 +513,13 @@ class CircuitWire(QGraphicsItem):
             gate_type = event.mimeData().text()
             position = event.pos()
             column_x = round(position.x() / 50) * 50  # Align the block's position horizontally
-            nearest_wire_index = self.find_nearest_wire(position.y())  # Find the nearest wire's index
+            nearest_wire_index = self.find_nearest_wire(position.y())
             self.addGate(gate_type, QPointF(column_x, nearest_wire_index * 200))
             event.setDropAction(Qt.MoveAction)
             event.accept()
 
     def hoverEnterEvent(self, event):
         hovered_item = self.scene().itemAt(event.scenePos(), QTransform())
-        # print("Hover enter event position:", event.scenePos())
         for gate, _, _, _, gate_item, gate_scene_pos in self.gates:
             gate_scene_rect = QRectF(gate_scene_pos, gate_item.boundingRect().size())
             if gate_scene_rect.contains(event.scenePos()):
@@ -536,8 +590,7 @@ class CircuitWire(QGraphicsItem):
     def find_nearest_wire(self, y_position):
         wire_positions = [wire.pos().y() for wire in self.scene().items() if isinstance(wire, CircuitWire)]
         nearest_wire_y = min(wire_positions, key=lambda y: abs(y - y_position))
-        # return nearest_wire_y
-        nearest_wire_index = wire_positions.index(nearest_wire_y)  # Get the index of the nearest wire
+        nearest_wire_index = wire_positions.index(nearest_wire_y)
         return nearest_wire_index
     
     def showError(self, message):
@@ -552,7 +605,7 @@ class SignalPlotCanvas(FigureCanvas):
 
     def __init__(self, parent=None):
         fig, (self.ax1, self.ax2) = plt.subplots(2, 1, sharex=True, figsize=(30, 8))
-        fig.subplots_adjust(left=0.1, right=0.95, top=0.9, bottom=0.1)
+        fig.subplots_adjust(left=0.1, right=0.95, top=0.925, bottom=0.1)
         super(SignalPlotCanvas, self).__init__(fig)
         self.setParent(parent)
         self.draw_empty_plot()
@@ -585,14 +638,12 @@ class SignalPlotCanvas(FigureCanvas):
         transmon_Q_normalized = transmon_Q / (2 * np.pi)
         cavity_signals_normalized = [(cavity_I / (2 * np.pi), cavity_Q / (2 * np.pi)) for cavity_I, cavity_Q in cavity_signals]
 
-        # Plot transmon signals
         sns.lineplot(x=tlist, y=transmon_I_normalized, ax=self.ax1, label='Transmon I')
         sns.lineplot(x=tlist, y=transmon_Q_normalized, ax=self.ax1, label='Transmon Q')
         self.ax1.legend()
         self.ax1.set_title("Transmon Signal Visualization")
         self.ax1.set_ylabel("Ω(t)/2π [MHz]")
 
-        # Plot cavity signals
         for i, (cavity_I, cavity_Q) in enumerate(cavity_signals_normalized):
             sns.lineplot(x=tlist, y=cavity_I, ax=self.ax2, label=f'Cavity {i+1} I')
             sns.lineplot(x=tlist, y=cavity_Q, ax=self.ax2, label=f'Cavity {i+1} Q')
@@ -607,17 +658,17 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.selected_gate = None
-        self.Nc = Nc
         self.undo_stack = []
         self.redo_stack = []
         self.initUI()
 
     def initUI(self):
         self.setWindowTitle('Quantum Control Generator')
-        self.setGeometry(60, 60, 1600, 1000)  # Window size
+        self.setGeometry(60, 80, 1600, 1000)  # Window size
 
         self.chi = None
         self.t1 = None
+        self.Nc = None
         self.chi_expr = None  # Store chi expression
         self.t1_expr = None   # Store T1 expression
 
@@ -726,13 +777,13 @@ class MainWindow(QMainWindow):
             }
         """)
         self.circuit_area.setInteractive(True)
-        self.circuit_area.setMinimumSize(1200, 600)  # Adjusted to make space for parameter widget
+        self.circuit_area.setMinimumSize(1200, 600)
         self.circuit_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
         self.circuit_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         self.signal_visualization = SignalPlotCanvas(self)
-        self.signal_visualization.setMinimumSize(1200, 800)  # Adjusted to make space for parameter widget
-
+        self.signal_visualization.setMinimumSize(1200, 720)
+        
         main_horizontal_layout = QHBoxLayout()
         main_horizontal_layout.addWidget(self.gate_widget)
         main_horizontal_layout.addWidget(self.circuit_area)
@@ -749,25 +800,25 @@ class MainWindow(QMainWindow):
         
         # Set the total circuit length to T1 (in microseconds)
         scene_width = self.t1 * 50  # 50 pixels per microsecond
-        self.scene.setSceneRect(0, 0, scene_width + 200, Nc * 70)
+        self.scene.setSceneRect(0, 0, scene_width + 200, self.Nc * 70)
 
     def get_initial_parameters(self):
         dialog = SystemParameterDialog(self)
         if dialog.exec_() == QDialog.Accepted:
-            self.chi, self.t1 = dialog.get_parameters()
+            self.chi, self.t1, self.Nc = dialog.get_parameters()
             self.chi_expr = dialog.chi_input.text()  # Save chi expression
             self.t1_expr = dialog.t1_input.text()    # Save T1 expression
         else:
-            self.close()
+            QApplication.quit()
+            sys.exit()
             
     def create_parameter_widget(self):
         widget = QWidget()
         layout = QVBoxLayout()
 
         if 'pi' in self.chi_expr:
-            self.chi_expr = self.chi_expr.replace('pi', 'π')
-        if '*' in self.chi_expr:
-            self.chi_expr = self.chi_expr.replace('*', '')
+            self.chi_expr = self.chi_expr.replace('*pi', 'π')
+            self.chi_expr = self.chi_expr.replace('* pi', 'π')
         self.chi_label = QLabel(f"χ: {self.chi_expr}")
         self.chi_label.setStyleSheet("font-family: 'Helvetica', sans-serif; font-size: 20px;")
         layout.addWidget(self.chi_label)
@@ -776,9 +827,8 @@ class MainWindow(QMainWindow):
         self.t1_label.setStyleSheet("font-family: 'Helvetica', sans-serif; font-size: 20px;")
         layout.addWidget(self.t1_label)
 
-        # Add explanation
         explanation = QLabel("Length factors convert to durations as follows:\n"
-                            "Pulse length = (2π / χ) * pulse length factor")
+                            "Pulse length = (2π / χ) · pulse length factor")
         explanation.setStyleSheet("font-family: 'Helvetica', sans-serif; font-size: 16px;")
         layout.addWidget(explanation)
 
@@ -787,12 +837,12 @@ class MainWindow(QMainWindow):
         return widget
 
     def init_circuit_wires(self):
-        self.transmon_wire = CircuitWire("Transmon", 0, self.t1)
-        self.transmon_wire.setPos(100, 0)  # Right shift to make room for gate icons
+        self.transmon_wire = CircuitWire("Transmon", 0, self.t1, self.Nc)
+        self.transmon_wire.setPos(100, 0)
         self.scene.addItem(self.transmon_wire)
 
-        for i in range(Nc):
-            cavity_wire = CircuitWire(f"Cavity {i + 1}", i + 1, self.t1)
+        for i in range(self.Nc):
+            cavity_wire = CircuitWire(f"Cavity {i + 1}", i + 1, self.t1, self.Nc)
             cavity_wire.setPos(100, (i + 1) * 60)
             self.scene.addItem(cavity_wire)
 
@@ -802,20 +852,19 @@ class MainWindow(QMainWindow):
         offset = 100
         axis_start = 50 + offset
         axis_end = 50 + self.t1 * 50 + offset
-        axis = QGraphicsLineItem(axis_start, (Nc + 1) * 60 + 20, axis_end, (Nc + 1) * 60 + 20)
+        axis = QGraphicsLineItem(axis_start, (self.Nc + 1) * 60 + 20, axis_end, (self.Nc + 1) * 60 + 20)
         self.scene.addItem(axis)
 
         tick_interval = 500  # Pixels per tick, each tick is 10 units of time
         for x in range(int(axis_start), int(axis_end) + 1, tick_interval):
-            tick = QGraphicsLineItem(x, (Nc + 1) * 60 + 15, x, (Nc + 1) * 60 + 25)
+            tick = QGraphicsLineItem(x, (self.Nc + 1) * 60 + 15, x, (self.Nc + 1) * 60 + 25)
             self.scene.addItem(tick)
             time_value = (x - 50 - offset) / 50
             label = QGraphicsTextItem(f"{time_value:.1f}")
-            label.setPos(x - 15, (Nc + 1) * 60 + 30)
+            label.setPos(x - 15, (self.Nc + 1) * 60 + 30)
             self.scene.addItem(label)
 
     def save_signal(self):
-        # Ask the user to specify the file name
         options = QFileDialog.Options()
         options |= QFileDialog.DontUseNativeDialog
         filename, _ = QFileDialog.getSaveFileName(self, "Save Signal", "", "CSV Files (*.csv);;All Files (*)", options=options)
@@ -868,14 +917,15 @@ class MainWindow(QMainWindow):
             print("No valid pulse parameters found.")
             return
 
-        control_signals = build_circuit_and_generate_signal(Nc, self.chi, pulse_params, plot_signals=False)
+        control_signals = build_circuit_and_generate_signal(self.Nc, self.chi, pulse_params, plot_signals=False)
         
         end_time = max([pulse_param["t_f"] for pulse_param in pulse_params])
-        tlist = np.linspace(0, end_time + 0.5, 100000)  # Pad with zero at the end for 0.5 microseconds; resolution: 1 nanosecond
+        tlist_end = end_time + 0.5
+        tlist = np.linspace(0, tlist_end, int(tlist_end * 1000))  # Pad with zero at the end for 0.5 microseconds; resolution: 1 nanosecond
         transmon_I = [control_signals['transmon_I'](t) for t in tlist]
         transmon_Q = [control_signals['transmon_Q'](t) for t in tlist]
         cavity_signals = []
-        for i in range(Nc):
+        for i in range(self.Nc):
             cavity_I = [control_signals[f'cavity_{i+1}_I'](t) for t in tlist]
             cavity_Q = [control_signals[f'cavity_{i+1}_Q'](t) for t in tlist]
             cavity_signals.append((cavity_I, cavity_Q))
@@ -933,16 +983,17 @@ class MainWindow(QMainWindow):
                         })
 
         if pulse_params:
-            control_signals = build_circuit_and_generate_signal(Nc, self.chi, pulse_params, plot_signals=False)
+            control_signals = build_circuit_and_generate_signal(self.Nc, self.chi, pulse_params, plot_signals=False)
             
             end_time = max([pulse_param["t_f"] for pulse_param in pulse_params])
-            tlist = np.linspace(0, end_time + 0.5, 100000)  # Pad with zero at the end for 0.5 microseconds; resolution: 1 nanosecond
+            tlist_end = end_time + 0.5
+            tlist = np.linspace(0, tlist_end, int(tlist_end * 1000))  # Pad with zero at the end for 0.5 microseconds; resolution: 1 nanosecond
 
             transmon_I = [control_signals['transmon_I'](t) for t in tlist]
             transmon_Q = [control_signals['transmon_Q'](t) for t in tlist]
 
             cavity_signals = []
-            for i in range(Nc):
+            for i in range(self.Nc):
                 cavity_I = [control_signals[f'cavity_{i+1}_I'](t) for t in tlist]
                 cavity_Q = [control_signals[f'cavity_{i+1}_Q'](t) for t in tlist]
                 cavity_signals.append((cavity_I, cavity_Q))
@@ -1010,7 +1061,7 @@ class MainWindow(QMainWindow):
                     for gate, parameters, position, additional_graphics, gate_item, gate_scene_pos in wire.gates:
                         if gate_item == self.selected_gate:
                             parent_widget = self.scene.views()[0]
-                            dialog = GateParameterDialog(gate, parameters['t_i'], self.chi, self.t1, parent_widget, edit_mode=True)
+                            dialog = GateParameterDialog(gate, parameters['t_i'], self.chi, self.t1, self.Nc, parent_widget, edit_mode=True)
                             dialog.start_time_input.setText(str(parameters['t_i']))
                             dialog.phase_input.setText(str(parameters['phase']))
                             
