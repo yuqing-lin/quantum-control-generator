@@ -4,7 +4,7 @@ from PyQt5.QtWidgets import (
     QFormLayout, QLineEdit, QDialogButtonBox, QApplication, QPushButton,
     QGraphicsView, QGraphicsScene, QGraphicsItem, QGraphicsPixmapItem,
     QMessageBox, QGraphicsEllipseItem, QGraphicsLineItem, QGraphicsTextItem,
-    QGraphicsDropShadowEffect, QAction, QFileDialog, QToolButton, QWhatsThis
+    QGraphicsDropShadowEffect, QAction, QFileDialog, QGridLayout
 )
 from PyQt5.QtGui import QPainter, QPen, QColor, QBrush, QFont, QDrag, QPixmap, QTransform
 from PyQt5.QtCore import Qt, QMimeData, QRect, QRectF, QPointF
@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import seaborn as sns
 import numpy as np
-from signal_generation import build_circuit_and_generate_signal
+from signal_generation import build_circuit_and_generate_signal, generate_ecd
 from qutip import *
 import csv
 
@@ -38,18 +38,26 @@ def draw_gate(gate_type, width, height, label_text, label_font_size, cavity_inde
         painter.setBrush(QColor('#D7263D'))
         painter.setPen(Qt.NoPen)
         # Apply to one cavity
-        painter.drawRect(0, 0 if initial else 60 * cavity_index + buffer, width, 50)
+        painter.drawRect(0, buffer if initial else 60 * cavity_index + buffer, width, 50)
         painter.setPen(Qt.white)
         painter.setFont(QFont('Helvetica', label_font_size - 4, QFont.Bold))
-        painter.drawText(QRect(0, 0 if initial else 60 * cavity_index + buffer, width, 50), Qt.AlignCenter, label_text)
+        painter.drawText(QRect(0, buffer if initial else 60 * cavity_index + buffer, width, 50), Qt.AlignCenter, label_text)
     
     elif gate_type == 'ECD':
-        painter.setBrush(QColor('#44001A'))
+        painter.setBrush(QColor('#5F00BA'))
         painter.setPen(Qt.NoPen)
-        painter.drawRect(0, 0 if initial else 60 * cavity_index + buffer, width, 50)
+        painter.drawRect(0, buffer if initial else 60 * cavity_index + buffer, width, 50)
         painter.setPen(Qt.white)
         painter.setFont(QFont('Helvetica', label_font_size - 4, QFont.Bold))
-        painter.drawText(QRect(0, 0 if initial else 60 * cavity_index + buffer, width, 50), Qt.AlignCenter, label_text)
+        painter.drawText(QRect(0, buffer if initial else 60 * cavity_index + buffer, width, 50), Qt.AlignCenter, label_text)
+
+    elif gate_type == 'Rotation':
+        painter.setBrush(QColor('#1789FC'))
+        painter.setPen(Qt.NoPen)
+        painter.drawRect(0, buffer, width, 50)
+        painter.setPen(Qt.white)
+        painter.setFont(QFont('Helvetica', label_font_size - 4, QFont.Bold))
+        painter.drawText(QRect(0, buffer, width, 50), Qt.AlignCenter, label_text)
 
     painter.end()
     return pixmap
@@ -65,6 +73,8 @@ class DragGate(QLabel):
             self.setPixmap(draw_gate('Displacement', 50, 50, 'D', 20, initial=True))
         elif gate_type == 'ECD':
             self.setPixmap(draw_gate('ECD', 50, 50, 'E', 20, initial=True))
+        elif gate_type == 'Rotation':
+            self.setPixmap(draw_gate('Rotation', 50, 50, 'R', 20, initial=True))
 
         self.setAcceptDrops(True)
 
@@ -81,6 +91,8 @@ class DragGate(QLabel):
                 drag.setPixmap(draw_gate('Displacement', 50, 500, 'D', 20))
             elif self.gate_type == 'ECD':
                 drag.setPixmap(draw_gate('ECD', 50, 500, 'E', 20))
+            elif self.gate_type == 'Rotation':
+                drag.setPixmap(draw_gate('Rotation', 50, 500, 'R', 20))
 
             drag.setHotSpot(event.pos())
             drag.exec_(Qt.MoveAction)
@@ -200,37 +212,23 @@ class GateParameterDialog(QDialog):
                 self.cavity_indices_input = QLineEdit(self)
                 self.cavity_indices_input.setPlaceholderText(f"Enter cavity indices separated by commas")
                 self.cavity_indices_input.setWhatsThis("""
-                    <p><b>Cavity Indices:</b> Specifies which cavity or cavities the operation should target.</p>
+                    <p><b>Cavity Indices:</b> Specifies which cavity or cavities the SNAP gate should target.</p>
                 """)
                 self.layout.addRow("Cavity Indices", self.cavity_indices_input)
                 # if self.edit_mode:
                 #     self.cavity_indices_input.setDisabled(True)
+            self.layout.addRow("Length Factor", self.length_factor_input)
         
-        if gate_type == 'Displacement' or gate_type == 'ECD':
-            if gate_type == 'Displacement':
-                self.alpha_input = QLineEdit(self)
-                self.alpha_input.setWhatsThis("""
-                    <p><b>Alpha:</b> The Displacements operator is defined as</p>
-                    <p>D(α) = exp(α a<sup>†</sup> - α<sup>*</sup> a)</p>
-                    <p>where α is the displacement amplitude.</p>
-                """)
-                self.layout.addRow("Alpha", self.alpha_input)
-            if gate_type == 'ECD':
-                self.beta_input = QLineEdit(self)
-                self.beta_input.setWhatsThis("""
-                    <p><b>Beta:</b> The ECD gate is defined as</p>
-                    <p>ECD(β) = D(β / 2) |e&gt;&lt;g| + D(-β / 2) |g&gt;&lt;e|</p>
-                    <p>where β is the displacement amplitude.</p>
-                """)
-                self.layout.addRow("Beta", self.beta_input)
-                self.unit_amp_input = QLineEdit("0.05")
-                self.unit_amp_input.setPlaceholderText("Enter unit amplitude")
-                self.unit_amp_input.setWhatsThis("""
-                    <p><b>Unit Amplitude:</b> The unit amplitude scaling of the ECD pulse.</p>
-                """)
-                self.layout.addRow("Unit Amplitude", self.unit_amp_input)
-            self.length_factor_input = QLineEdit("0.01" if gate_type == 'Displacement' else "0.1")
-            self.length_factor_input.setPlaceholderText(f"Enter {gate_type} pulse length factor")
+        elif gate_type == 'Displacement':
+            self.alpha_input = QLineEdit(self)
+            self.alpha_input.setWhatsThis("""
+                <p><b>Alpha:</b> The Displacement operator is defined as</p>
+                <p>D(α) = exp(α a<sup>†</sup> - α<sup>*</sup> a)</p>
+                <p>where α is the displacement amplitude.</p>
+            """)
+            self.layout.addRow("Alpha", self.alpha_input)
+            self.length_factor_input = QLineEdit("0.01")
+            self.length_factor_input.setPlaceholderText("Enter Displacement pulse length factor")
             self.length_factor_input.setWhatsThis("""
                 <p><b>Length Factor:</b> Determines the duration of the pulse.</p>
                 <p>Pulse length = (2π / χ) · length factor.</p>
@@ -239,24 +237,82 @@ class GateParameterDialog(QDialog):
                 self.cavity_index_input = QLineEdit(self)
                 self.cavity_index_input.setPlaceholderText("Enter cavity index")
                 self.cavity_index_input.setWhatsThis("""
-                    <p><b>Cavity Index:</b> Specifies which cavity the operation should target.</p>
+                    <p><b>Cavity Index:</b> Specifies which cavity the Displacement operator should target.</p>
+                """)
+                self.layout.addRow("Cavity Index", self.cavity_index_input)
+                # if self.edit_mode:
+                #     self.cavity_index_input.setDisabled(True)
+            self.layout.addRow("Length Factor", self.length_factor_input)
+            
+        elif gate_type == 'ECD':
+            self.beta_input = QLineEdit(self)
+            self.beta_input.setWhatsThis("""
+                <p><b>Beta:</b> The ECD gate is defined as</p>
+                <p>ECD(β) = D(β / 2) |e&gt;&lt;g| + D(-β / 2) |g&gt;&lt;e|</p>
+                <p>where β is the displacement amplitude.</p>
+            """)
+            self.layout.addRow("Beta", self.beta_input)
+            self.unit_amp_input = QLineEdit("0.05")
+            self.unit_amp_input.setPlaceholderText("Enter unit amplitude")
+            self.unit_amp_input.setWhatsThis("""
+                <p><b>Unit Amplitude:</b> The unit amplitude scaling of the ECD pulse.</p>
+            """)
+            self.layout.addRow("Unit Amplitude", self.unit_amp_input)
+            self.max_amp_input = QLineEdit("30")
+            self.max_amp_input.setPlaceholderText("Enter maximum amplitude (α<sub>0<sub>)")
+            self.max_amp_input.setWhatsThis("""
+                <p><b>Max Amplitude:</b> The maximum displacement amplitude for the ECD pulse (α<sub>0<sub>).</p>
+            """)
+            self.layout.addRow("Max Amplitude", self.max_amp_input)
+            if self.Nc > 1:
+                self.cavity_index_input = QLineEdit(self)
+                self.cavity_index_input.setPlaceholderText("Enter cavity index")
+                self.cavity_index_input.setWhatsThis("""
+                    <p><b>Cavity Index:</b> Specifies which cavity the ECD gate should target.</p>
                 """)
                 self.layout.addRow("Cavity Index", self.cavity_index_input)
                 # if self.edit_mode:
                 #     self.cavity_index_input.setDisabled(True)
 
-        self.layout.addRow("Length Factor", self.length_factor_input)
+        elif gate_type == 'Rotation':
+            self.theta_input = QLineEdit(self)
+            self.theta_input.setWhatsThis("""
+                <p><b>Theta:</b> The Rotation operator is defined as</p>
+                <p>R<sub>φ</sub>(θ) = exp(-i(θ / 2)(σ<sub>x</sub> cos φ + σ<sub>y</sub> sin φ))</p>
+                <p>where θ is the rotation angle.</p>
+            """)
+            self.layout.addRow("Theta", self.theta_input)
 
-        # self.amplitude_input = QLineEdit("pi")
-        # self.amplitude_input.setPlaceholderText("Enter amplitude")
-        # self.layout.addRow("Amplitude", self.amplitude_input)
+            self.phi_input = QLineEdit(self)
+            self.phi_input.setWhatsThis("""
+                <p><b>Phi:</b> The rotation operator is defined as</p>
+                <p>R<sub>φ</sub>(θ) = exp(-i(θ / 2)(σ<sub>x</sub> cos φ + σ<sub>y</sub> sin φ))</p>
+                <p>where φ is the phase angle.</p>
+            """)
+            self.layout.addRow("Phi", self.phi_input)
 
-        self.phase_input = QLineEdit("0")
-        self.phase_input.setPlaceholderText("Enter phase value (e.g., 0, pi/2, 2*pi)")
-        self.phase_input.setWhatsThis("""
-            <p><b>Phase:</b> The additional phase to apply to the pulse.</p>
-        """)
-        self.layout.addRow("Phase", self.phase_input)
+            self.length_factor_input = QLineEdit("0.01")
+            self.length_factor_input.setPlaceholderText("Enter Rotation pulse length factor")
+            self.length_factor_input.setWhatsThis("""
+                <p><b>Length Factor:</b> Determines the duration of the pulse.</p>
+                <p>Pulse length = (2π / χ) · length factor.</p>
+            """)
+            self.layout.addRow("Length Factor", self.length_factor_input)
+            
+            self.unit_amp_input = QLineEdit("0.05")
+            self.unit_amp_input.setPlaceholderText("Enter unit amplitude")
+            self.unit_amp_input.setWhatsThis("""
+                <p><b>Unit Amplitude:</b> The unit amplitude scaling of the Rotation pulse.</p>
+            """)
+            self.layout.addRow("Unit Amplitude", self.unit_amp_input)
+
+        if gate_type != 'Rotation':
+            self.phase_input = QLineEdit("0")
+            self.phase_input.setPlaceholderText("Enter phase value (e.g., 0, pi/2, 2*pi)")
+            self.phase_input.setWhatsThis("""
+                <p><b>Phase:</b> The additional phase to apply to the pulse.</p>
+            """)
+            self.layout.addRow("Phase", self.phase_input)
 
         self.buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
         self.buttons.accepted.connect(self.accept)
@@ -266,8 +322,9 @@ class GateParameterDialog(QDialog):
     def get_parameters(self):
         parameters = {
             "t_i": self.validate_float(self.start_time_input.text(), "start time"),
-            "phase": self.validate_float(self.phase_input.text(), "phase"),
         }
+        if self.gate_type != 'Rotation': parameters["phase"] = self.validate_float(self.phase_input.text(), "phase")
+
         two_pi = 2 * np.pi
 
         if self.gate_type == 'SNAP':
@@ -284,20 +341,12 @@ class GateParameterDialog(QDialog):
             length_factor = self.validate_float(self.length_factor_input.text(), "length factor")
             parameters["delta_t"] = (two_pi / self.chi) * length_factor
             
-        elif self.gate_type == 'Displacement' or self.gate_type == 'ECD':
-            if self.gate_type == 'Displacement':
-                alpha = self.alpha_input.text().split(',')
-                if len(alpha) > 1:
-                    self.showError(f"Only one alpha value is allowed for Displacement gate.")
-                    raise ValueError(f"Only one alpha value is allowed for Displacement gate.")
-                parameters["alpha"] = self.validate_complex(alpha[0], "alpha")
-            if self.gate_type == 'ECD':
-                beta = self.beta_input.text().split(',')
-                if len(beta) > 1:
-                    self.showError(f"Only one beta value is allowed for ECD gate.")
-                    raise ValueError(f"Only one beta value is allowed for ECD gate.")
-                parameters["beta"] = self.validate_complex(beta[0], "beta")
-                parameters["unit_amp"] = self.validate_float(self.unit_amp_input.text(), "unit_amp")
+        elif self.gate_type == 'Displacement':
+            alpha = self.alpha_input.text().split(',')
+            if len(alpha) > 1:
+                self.showError(f"Only one alpha value is allowed for Displacement operator.")
+                raise ValueError(f"Only one alpha value is allowed for Displacement operator.")
+            parameters["alpha"] = self.validate_complex(alpha[0], "alpha")
             length_factor = self.validate_float(self.length_factor_input.text(), "length factor")
             parameters["delta_t"] = (two_pi / self.chi) * length_factor  # Duration
             if self.Nc == 1:
@@ -308,6 +357,38 @@ class GateParameterDialog(QDialog):
                     self.showError(f"Invalid cavity index. Please enter an integer between 1 and {self.Nc}.")
                     raise ValueError(f"Invalid cavity index. Please enter an integer between 1 and {self.Nc}.")
                 parameters["cavity_index"] = cavity_index
+
+        elif self.gate_type == 'ECD':
+            beta = self.beta_input.text().split(',')
+            if len(beta) > 1:
+                self.showError(f"Only one beta value is allowed for ECD gate.")
+                raise ValueError(f"Only one beta value is allowed for ECD gate.")
+            parameters["beta"] = self.validate_complex(beta[0], "beta")
+            parameters["unit_amp"] = self.validate_float(self.unit_amp_input.text(), "unit_amp")
+            parameters["max_amp"] = self.validate_float(self.max_amp_input.text(), "max_amp")
+            if self.Nc == 1:
+                parameters["cavity_index"] = 1
+            else:
+                cavity_index = self.validate_int(self.cavity_index_input.text(), "cavity index")
+                if cavity_index < 1 or cavity_index > self.Nc:
+                    self.showError(f"Invalid cavity index. Please enter an integer between 1 and {self.Nc}.")
+                    raise ValueError(f"Invalid cavity index. Please enter an integer between 1 and {self.Nc}.")
+                parameters["cavity_index"] = cavity_index
+
+        elif self.gate_type == 'Rotation':
+            theta = self.theta_input.text().split(',')
+            if len(theta) > 1:
+                self.showError(f"Only one theta value is allowed for Rotation operator.")
+                raise ValueError(f"Only one theta value is allowed for Rotation operator.")
+            parameters["theta"] = self.validate_float(self.theta_input.text(), "theta")
+            phi = self.phi_input.text().split(',')
+            if len(phi) > 1:
+                self.showError(f"Only one phi value is allowed for Rotation operator.")
+                raise ValueError(f"Only one phi value is allowed for Rotation operator.")
+            parameters["phi"] = self.validate_float(self.phi_input.text(), "phi")
+            length_factor = self.validate_float(self.length_factor_input.text(), "length factor")
+            parameters["delta_t"] = (two_pi / self.chi) * length_factor  # Duration
+            parameters["unit_amp"] = self.validate_float(self.unit_amp_input.text(), "unit_amp")
         
         return parameters
     
@@ -431,6 +512,13 @@ class CircuitWire(QGraphicsItem):
             start_time = parameters['t_i']  
             visualization_position = start_time * 50 + self.offset
 
+            if gate == 'ECD':
+                _, _, _, _, length = generate_ecd(
+                    parameters['beta'], main_window.chi, start_time, 
+                    parameters['phase'], parameters['unit_amp'], parameters['max_amp']
+                )
+                parameters['delta_t'] = length
+            
             duration = parameters['delta_t']
             end_time = start_time + duration
 
@@ -489,6 +577,8 @@ class CircuitWire(QGraphicsItem):
                 dot.setPen(QPen(Qt.NoPen))
                 self.scene().addItem(dot)
                 additional_graphics.append(dot)
+            elif gate == 'Rotation':
+                gate_item = QGraphicsPixmapItem(draw_gate('Rotation', gate_width, 500, 'S', 20))
 
             gate_item.setPos(visualization_position, -10)
             self.scene().addItem(gate_item)
@@ -679,42 +769,45 @@ class MainWindow(QMainWindow):
         self.main_layout.setSpacing(20)
 
         self.snap_gate = DragGate('SNAP')
-        self.displacement_gate = DragGate('Displacement')
+        self.displacement_operator = DragGate('Displacement')
         self.ecd_gate = DragGate('ECD')
+        self.rotation_operator = DragGate('Rotation')
 
-        snap_layout = QHBoxLayout()
-        snap_layout.addWidget(self.snap_gate)
+        gate_layout = QGridLayout()
+        gate_layout.addWidget(self.snap_gate, 0, 0)
         snap_label = QLabel("SNAP")
         snap_label.setStyleSheet("font-family: 'Helvetica', sans-serif; font-size: 20px;")
-        snap_layout.addWidget(snap_label)
+        gate_layout.addWidget(snap_label, 0, 1)
 
-        displacement_layout = QHBoxLayout()
-        displacement_layout.addWidget(self.displacement_gate)
+        gate_layout.addWidget(self.displacement_operator, 1, 0)
         displacement_label = QLabel("Displacement")
         displacement_label.setStyleSheet("font-family: 'Helvetica', sans-serif; font-size: 20px;")
-        displacement_layout.addWidget(displacement_label)
+        gate_layout.addWidget(displacement_label, 1, 1)
 
-        ecd_layout = QHBoxLayout()
-        ecd_layout.addWidget(self.ecd_gate)
+        gate_layout.addWidget(self.ecd_gate, 2, 0)
         ecd_label = QLabel("ECD")
         ecd_label.setStyleSheet("font-family: 'Helvetica', sans-serif; font-size: 20px;")
-        ecd_layout.addWidget(ecd_label)
+        gate_layout.addWidget(ecd_label, 2, 1)
 
-        gate_layout_with_labels = QVBoxLayout()
-        gate_layout_with_labels.addLayout(snap_layout)
-        gate_layout_with_labels.addLayout(displacement_layout)
-        gate_layout_with_labels.addLayout(ecd_layout)
+        gate_layout.addWidget(self.rotation_operator, 3, 0)
+        rotation_label = QLabel("Rotation")
+        rotation_label.setStyleSheet("font-family: 'Helvetica', sans-serif; font-size: 20px;")
+        gate_layout.addWidget(rotation_label, 3, 1)
+
+        gate_layout.setVerticalSpacing(20)
 
         self.parameter_widget = self.create_parameter_widget()
 
         vertical_layout = QVBoxLayout()
-        vertical_layout.addLayout(gate_layout_with_labels)
+        vertical_layout.addLayout(gate_layout)
         vertical_layout.addWidget(self.parameter_widget)
 
         self.gate_widget = QWidget()
         self.gate_widget.setLayout(vertical_layout)
         self.gate_widget.setStyleSheet("background: none;") 
-
+        self.gate_widget.setMinimumWidth(250)
+        self.gate_widget.layout().setContentsMargins(0, 0, 30, 0)
+        
         self.save_button = QPushButton('Save Signals')
         self.save_button.setStyleSheet("""
             background-color: #4DAA57;
@@ -827,10 +920,10 @@ class MainWindow(QMainWindow):
         self.t1_label.setStyleSheet("font-family: 'Helvetica', sans-serif; font-size: 20px;")
         layout.addWidget(self.t1_label)
 
-        explanation = QLabel("Length factors convert to durations as follows:\n"
-                            "Pulse length = (2π / χ) · pulse length factor")
-        explanation.setStyleSheet("font-family: 'Helvetica', sans-serif; font-size: 16px;")
-        layout.addWidget(explanation)
+        # explanation = QLabel("Length factors convert to durations as follows:\n"
+        #                     "Pulse length = (2π / χ) · pulse length factor")
+        # explanation.setStyleSheet("font-family: 'Helvetica', sans-serif; font-size: 16px;")
+        # layout.addWidget(explanation)
 
         widget.setLayout(layout)
         widget.setStyleSheet("background: none;")
@@ -882,7 +975,6 @@ class MainWindow(QMainWindow):
                             "parameters": params['thetas'],
                             "t_i": params['t_i'],
                             "t_f": params['t_i'] + params['delta_t'],
-                            # "amplitude": params['amplitude'],
                             "phase": params['phase'],
                             "waveform": "gaussian",
                             "chop": 6,
@@ -894,7 +986,6 @@ class MainWindow(QMainWindow):
                             "parameter": params['alpha'],
                             "t_i": params['t_i'],
                             "t_f": params['t_i'] + params['delta_t'],
-                            # "amplitude": params['amplitude'],
                             "phase": params['phase'],
                             "waveform": "gaussian",
                             "chop": 6,
@@ -907,10 +998,22 @@ class MainWindow(QMainWindow):
                             "t_i": params['t_i'],
                             "t_f": params['t_i'] + params['delta_t'],
                             "unit_amp": params['unit_amp'],
+                            "max_amp": params['max_amp'],
                             "phase": params['phase'],
                             "waveform": "gaussian",
                             "chop": 6,
                             "cavity_index": params["cavity_index"]
+                        })
+                    elif gate == 'Rotation':
+                        pulse_params.append({
+                            "type": "rotation",
+                            "theta": params['theta'],
+                            "phi": params['phi'],
+                            "t_i": params['t_i'],
+                            "t_f": params['t_i'] + params['delta_t'],
+                            "unit_amp": params['unit_amp'],
+                            "waveform": "gaussian",
+                            "chop": 6
                         })
 
         if not pulse_params:
@@ -951,7 +1054,6 @@ class MainWindow(QMainWindow):
                             "parameters": params['thetas'],
                             "t_i": params['t_i'],
                             "t_f": params['t_i'] + params['delta_t'],
-                            # "amplitude": params['amplitude'],
                             "phase": params['phase'],
                             "waveform": "gaussian",
                             "chop": 6,
@@ -963,7 +1065,6 @@ class MainWindow(QMainWindow):
                             "parameter": params['alpha'],
                             "t_i": params['t_i'],
                             "t_f": params['t_i'] + params['delta_t'],
-                            # "amplitude": params['amplitude'],
                             "phase": params['phase'],
                             "waveform": "gaussian",
                             "chop": 6,
@@ -976,10 +1077,22 @@ class MainWindow(QMainWindow):
                             "t_i": params['t_i'],
                             "t_f": params['t_i'] + params['delta_t'],
                             "unit_amp": params['unit_amp'],
+                            "max_amp": params['max_amp'],                            
                             "phase": params['phase'],
                             "waveform": "gaussian",
                             "chop": 6,
                             "cavity_index": params["cavity_index"]
+                        })
+                    elif gate == 'Rotation':
+                        pulse_params.append({
+                            "type": "rotation",
+                            "theta": params['theta'],
+                            "phi": params['phi'],
+                            "t_i": params['t_i'],
+                            "t_f": params['t_i'] + params['delta_t'],
+                            "unit_amp": params['unit_amp'],
+                            "waveform": "gaussian",
+                            "chop": 6
                         })
 
         if pulse_params:
@@ -1078,9 +1191,13 @@ class MainWindow(QMainWindow):
                             elif gate == 'ECD':
                                 dialog.beta_input.setText(str(parameters['beta']))
                                 dialog.unit_amp_input.setText(str(parameters['unit_amp']))
-                                dialog.length_factor_input.setText(str(parameters['delta_t'] * self.chi / (2 * np.pi)))
                                 if self.Nc > 1:
                                     dialog.cavity_index_input.setText(str(parameters['cavity_index']))
+                            elif gate == 'Rotation':
+                                dialog.theta_input.setText(str(parameters['theta']))
+                                dialog.phi_input.setText(str(parameters['phi']))
+                                dialog.length_factor_input.setText(str(parameters['delta_t'] * self.chi / (2 * np.pi)))
+                                dialog.unit_amp_input.setText(str(parameters['unit_amp']))
                             
                             if dialog.exec_() == QDialog.Accepted:
                                 try:

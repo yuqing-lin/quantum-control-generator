@@ -1,6 +1,6 @@
 # Adapted from the Echoed Conditional Displacement (ECD) Control project
 # https://github.com/alec-eickbusch/ECD_control
-# Based on the paper: Fast universal control of an oscillator with a weak dispersive coupling to a qubit (2021) arXiv:2111.06414
+# Based on the paper: Fast universal control of an oscillator with weak dispersive coupling to a qubit. (2022). Nature Physics, 18(12), 1464-1469. 
 
 import numpy as np
 from scipy.interpolate import interp1d
@@ -42,29 +42,24 @@ class FakePulse:
         self.detune = detune
 
     def make_wave(self, pad=False):
-        """
-        Generates a Gaussian wave with the specified `sigma` and `chop` values.
-        """
         wave = gaussian_wave(sigma=self.sigma, chop=self.chop)
         return np.real(wave), np.imag(wave)
 
 class FakeStorage:
     def __init__(
         self,
-        chi_kHz=30.0,
-        chi_prime_Hz=1.0,
+        chi_kHz,
+        # chi_prime_Hz=1.0,
         Ks_Hz=2.0,  # The Kerr effect strength
         epsilon_m_MHz=400.0,  # The maximum drive amplitude
         unit_amp=0.05,
         sigma=15,
-        chop=4,
-        max_dac=0.6  # The maximum DAC amplitude
+        chop=4
     ):
         self.chi_kHz = chi_kHz
-        self.chi_prime_Hz = chi_prime_Hz
+        # self.chi_prime_Hz = chi_prime_Hz
         self.Ks_Hz = Ks_Hz
         self.epsilon_m_MHz = epsilon_m_MHz
-        self.max_dac = max_dac
 
         self.displace = FakePulse(unit_amp=unit_amp, sigma=sigma, chop=chop)
 
@@ -176,14 +171,13 @@ def conditional_displacement(
     curvature_correction=True,
     pad=False,
     finite_difference=True,
-    qubit_pulse_detuning=0,
-    system=None
+    qubit_pulse_detuning=0
 ):
     beta = float(beta) if isinstance(beta, int) else beta
     alpha = float(alpha) if isinstance(alpha, int) else alpha
-    chi = 2 * np.pi * 1e-6 * (system.chi_kHz if system else storage.chi_kHz)
+    chi = 2 * np.pi * 1e-6 * storage.chi_kHz
     chi_prime = 0
-    Ks = 2 * np.pi * 1e-9 * (system.chi_prime_Hz if system else storage.Ks_Hz)
+    Ks = 2 * np.pi * 1e-9 * storage.Ks_Hz
     delta = chi / 2.0
     epsilon_m = 2 * np.pi * 1e-3 * storage.epsilon_m_MHz
     alpha = np.abs(alpha)
@@ -283,6 +277,7 @@ def conditional_displacement(
     n = np.abs(alpha) ** 2
     chi_effective = chi + 2 * chi_prime * n
     tw = int(np.abs(np.arcsin(beta_abs / (2 * alpha)) / chi_effective))
+    # print("Waiting time between disp and qubit pulse: " + str(tw) + "ns")
 
     # Calculate ratios
     r, r0, r1, r2 = ratios(alpha, tw)

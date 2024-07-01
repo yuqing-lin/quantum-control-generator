@@ -116,49 +116,63 @@ def generate_snap(chi, waveform, parameters, length, start, phase, chop=12, rise
 
     return snap_I, snap_Q
 
-def generate_ecd(beta, chi, length, start, phase, unit_amp, alpha_CD=30, buffer_time=0.01, curvature_correction=False, finite_difference=True):
+def generate_ecd(beta, chi, start, phase, unit_amp, max_amp, buffer_time=0.004, curvature_correction=False, finite_difference=True):
     # chi_prime_Hz = 1.0
     # Ks_Hz = 2.0  # The Kerr effect strength
     # epsilon_m_MHz = 400.0  # The maximum drive amplitude
     # sigma = 15
     # chop = 4
-    # max_dac = 0.6  # The maximum DAC amplitude
-    buffer_time_ns = int(buffer_time * 1e3)
+    buffer_time_ns = int(buffer_time * 1e3)  # Convert buffer time from microseconds to nanoseconds
     storage = FakeStorage(chi_kHz=chi, unit_amp=unit_amp)
     qubit = FakeQubit()
 
     I_cavity_func, Q_cavity_func, I_qubit_func, Q_qubit_func = conditional_displacement(
         beta,
-        alpha=alpha_CD,
+        alpha=max_amp,
         storage=storage,
         qubit=qubit,
         buffer_time=buffer_time_ns,
         curvature_correction=curvature_correction,
-        finite_difference=finite_difference,
-        system=None
+        finite_difference=finite_difference
     )
 
-    # Normalize the time
-    original_t_max = max(I_cavity_func.x[-1], Q_cavity_func.x[-1], I_qubit_func.x[-1], Q_qubit_func.x[-1])
-    scale_factor = length / original_t_max
-    def normalize_time(func):
-        return lambda t: func(t / scale_factor)
-    
-    I_cavity_norm = normalize_time(I_cavity_func)
-    Q_cavity_norm = normalize_time(Q_cavity_func)
-    I_qubit_norm = normalize_time(I_qubit_func)
-    Q_qubit_norm = normalize_time(Q_qubit_func)
+    length_ns = max(I_cavity_func.x[-1], Q_cavity_func.x[-1], I_qubit_func.x[-1], Q_qubit_func.x[-1])
+    length = length_ns / 1000.0
+    # print("Pulse length: " + str(length) + " μs")
+
+    def apply_time_shift(func):
+        return lambda t: func(t * 1e3 - start * 1e3) if start <= t < start + length else 0
+
+    I_cavity_shifted = apply_time_shift(I_cavity_func)
+    Q_cavity_shifted = apply_time_shift(Q_cavity_func)
+    I_qubit_shifted = apply_time_shift(I_qubit_func)
+    Q_qubit_shifted = apply_time_shift(Q_qubit_func)
 
     phase_factor = np.exp(1j * phase)
-    transmon_signal = lambda t: phase_factor * (I_qubit_norm(t - start) + 1j * Q_qubit_norm(t - start)) if start <= t < start + length else 0
-    cavity_signal = lambda t: phase_factor * (I_cavity_norm(t - start) + 1j * Q_cavity_norm(t - start)) if start <= t < start + length else 0
-    
+    transmon_signal = lambda t: phase_factor * (I_qubit_shifted(t) + 1j * Q_qubit_shifted(t))
+    cavity_signal = lambda t: phase_factor * (I_cavity_shifted(t) + 1j * Q_cavity_shifted(t))
+
     I_transmon = lambda t: np.real(transmon_signal(t))
     Q_transmon = lambda t: np.imag(transmon_signal(t))
     I_cavity = lambda t: np.real(cavity_signal(t))
     Q_cavity = lambda t: np.imag(cavity_signal(t))
 
-    return I_transmon, Q_transmon, I_cavity, Q_cavity
+    return I_transmon, Q_transmon, I_cavity, Q_cavity, length
+
+def generate_rotation(theta, phi, length, start, unit_amp, detune=0, waveform='gaussian', chop=12, rise_time=1):
+    amp = unit_amp * (theta / np.pi)
+    
+    if waveform == 'square':
+        unit_amp = calibrate_square_unit_amp(length)
+        rotation_I, rotation_Q = square_pulse(detune, amp * unit_amp, length, start, phi)
+    elif waveform == 'gaussian':
+        unit_amp = calibrate_gaussian_unit_amp(length, chop)
+        rotation_I, rotation_Q = gaussian_pulse(detune, amp * unit_amp, length, start, chop, phi)
+    elif waveform == 'rounded_square':
+        unit_amp = calibrate_rounded_square_unit_amp(length, rise_time)
+        rotation_I, rotation_Q = rounded_square_pulse(detune, amp * unit_amp, length, start, rise_time, phi)
+    
+    return rotation_I, rotation_Q
 
 # Control signal plotting function
 def plot_control_signals(tlist, transmon_I, transmon_Q, cavity_I, cavity_Q):
@@ -196,7 +210,7 @@ def build_circuit_and_generate_signal(Nc, chi, pulse_params, plot_signals=False)
     Parameters:
     chi (float): The interaction strength.
     pulse_params (list): List of dictionaries containing pulse parameters. Each dictionary has the keys:
-                         - type (str): 'snap' or 'displacement'.
+                         - type (str): 'snap', 'displacement', 'ecd', or 'rot'.
                          - parameters (list or complex): Parameters for the pulse.
                          - t_i (float): Initial time for the pulse.
                          - t_f (float): Final time for the pulse.
@@ -231,16 +245,20 @@ def build_circuit_and_generate_signal(Nc, chi, pulse_params, plot_signals=False)
             cavity_I_list[cavity_index] = lambda t, cavity_I=cavity_I_list[cavity_index], I=I: cavity_I(t) + I(t)
             cavity_Q_list[cavity_index] = lambda t, cavity_Q=cavity_Q_list[cavity_index], Q=Q: cavity_Q(t) + Q(t)
         elif gate["type"] == "ecd":
-            I_transmon, Q_transmon, I_cavity, Q_cavity = generate_ecd(gate["parameter"], chi, length, t_i, phase, gate["unit_amp"])
+            I_transmon, Q_transmon, I_cavity, Q_cavity, length = generate_ecd(gate["parameter"], chi, t_i, phase, gate["unit_amp"], gate["max_amp"])
             transmon_I = lambda t, transmon_I=transmon_I, I_trans=I_transmon: transmon_I(t) + I_trans(t)
             transmon_Q = lambda t, transmon_Q=transmon_Q, Q_trans=Q_transmon: transmon_Q(t) + Q_trans(t)
             cavity_index = int(gate["cavity_index"]) - 1  # Adjust for 1-based indexing
             cavity_I_list[cavity_index] = lambda t, cavity_I=cavity_I_list[cavity_index], I_cav=I_cavity: cavity_I(t) + I_cav(t)
             cavity_Q_list[cavity_index] = lambda t, cavity_Q=cavity_Q_list[cavity_index], Q_cav=Q_cavity: cavity_Q(t) + Q_cav(t)
+        elif gate["type"] == "rotation":
+            I_rot, Q_rot = generate_rotation(gate["theta"], gate["phi"], length, t_i, gate["unit_amp"])
+            transmon_I = lambda t, transmon_I=transmon_I, I_rot=I_rot: transmon_I(t) + I_rot(t)
+            transmon_Q = lambda t, transmon_Q=transmon_Q, Q_rot=Q_rot: transmon_Q(t) + Q_rot(t)
 
     if plot_signals:
-        sequence_length = pulse_params[-1]["t_f"]
-        tlist = np.linspace(0, sequence_length, 100000)
+        sequence_length = max(gate["t_f"] for gate in pulse_params)
+        tlist = np.linspace(0, sequence_length, int(sequence_length * 10e3))
         for i in range(Nc):
             plot_control_signals(tlist, transmon_I, transmon_Q, cavity_I_list[i], cavity_Q_list[i])
 
